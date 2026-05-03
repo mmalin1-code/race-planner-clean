@@ -10,3 +10,59 @@ const line=L.polyline([],{color:'#007aff',weight:5}).addTo(map);
 map.on('click',e=>line.addLatLng(e.latlng));
 document.getElementById('clear').onclick=()=>line.setLatLngs([]);
 </script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BRRM Race Course Planner</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root { --panel:#fff; --bg:#f5f6f8; --text:#1f2937; --muted:#6b7280; --b:#e5e7eb; }
+    * { box-sizing:border-box; } body { margin:0; font-family:Arial,sans-serif; color:var(--text); background:var(--bg); }
+    #app { display:grid; grid-template-columns:340px 1fr; height:100vh; } #panel { border-right:1px solid var(--b); background:var(--panel); padding:12px; overflow:auto; } #map { height:100vh; }
+    .block { border:1px solid var(--b); border-radius:10px; padding:10px; margin-bottom:10px; } input,select,textarea,button { width:100%; padding:8px; border:1px solid var(--b); border-radius:8px; margin-top:6px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; } .chip { display:flex; gap:8px; align-items:center; margin:6px 0; } .note-list { max-height:200px; overflow:auto; border:1px solid var(--b); border-radius:8px; padding:6px; }
+    #status { font-size:.8rem; color:#92400e; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:8px; margin:0 0 10px; display:none; }
+  </style>
+</head><body>
+<div id="app"><aside id="panel">
+  <h2>Race Course Planner</h2><div id="status"></div>
+  <div class="block"><h3>Race</h3><select id="raceSelect"></select><div class="row"><button id="newRaceBtn">+ New Race</button><button id="deleteRaceBtn">Delete Race</button></div></div>
+  <div class="block"><h3>Distances</h3><select id="distanceSelect"></select><div class="row"><button id="newDistanceBtn">+ Distance</button><button id="clearDistanceBtn">Clear Path</button></div><label class="chip"><input type="checkbox" id="showOverlap" checked/>Show overlap</label><div id="distanceFilters"></div></div>
+  <div class="block"><h3>Tools</h3><div class="row"><button id="drawBtn">Draw route</button><button id="pinBtn">Place item</button></div><select id="pinType"><option value="mile">Mile marker</option><option value="sign">Course sign</option><option value="aid">Aid station</option><option value="turn">Turn warning</option><option value="hazard">Hazard</option><option value="note">Map note</option></select><button id="autoMileBtn">Auto-place mile markers</button></div>
+  <div class="block"><h3>Notes</h3><textarea id="globalNote" rows="3" placeholder="General note for this race..."></textarea><button id="saveGlobalNote">Save race note</button><div class="note-list" id="noteList"></div></div>
+</aside><main id="map"></main></div>
+<script>
+const COLORS=['#007aff','#ff3b30','#34c759','#ff9500','#af52de','#5ac8fa'];
+const state={mode:'draw',selectedRace:'Spring Festival',selectedDistance:'5K',showOverlap:true,races:{'Spring Festival':{note:'',distances:{'5K':{coords:[],visible:true},'10K':{coords:[],visible:true}},pins:[],notes:[]},'City Half':{note:'',distances:{'Half':{coords:[],visible:true}},pins:[],notes:[]}},distanceLayers:{},markers:[]};
+const map=L.map('map').setView([38.63,-90.2],11);
+const tiles=[
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}),
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:20,subdomains:'abcd',attribution:'&copy; OpenStreetMap &copy; CARTO'})
+];
+let activeTile=0; tiles[0].addTo(map);
+function showStatus(msg){status.style.display='block'; status.textContent=msg;}
+function tryFallbackTiles(){
+  if(activeTile===0){ map.removeLayer(tiles[0]); tiles[1].addTo(map); activeTile=1; showStatus('Primary tiles unavailable (404/network). Switched to fallback map tiles.'); }
+  else showStatus('Map tiles failed to load from both providers. Check internet/firewall.');
+}
+tiles.forEach(t=>t.on('tileerror',tryFallbackTiles));
+function race(){return state.races[state.selectedRace]} function lineKey(r,d){return `${r}::${d}`}
+function ensureDistanceLayers(){Object.keys(race().distances).forEach((d,i)=>{const k=lineKey(state.selectedRace,d); if(!state.distanceLayers[k]) state.distanceLayers[k]=L.polyline([],{color:COLORS[i%COLORS.length],weight:5,opacity:.85}).addTo(map); refreshDistanceData(d);});}
+function refreshDistanceData(d){const l=state.distanceLayers[lineKey(state.selectedRace,d)]; if(!l)return; l.setLatLngs(race().distances[d].coords.map(([lng,lat])=>[lat,lng])); const v=state.showOverlap?race().distances[d].visible:d===state.selectedDistance; if(v)l.addTo(map); else map.removeLayer(l);}
+function rerenderFilters(){distanceFilters.innerHTML=''; Object.entries(race().distances).forEach(([d,obj])=>{const el=document.createElement('label'); el.className='chip'; el.innerHTML=`<input type='checkbox' ${obj.visible?'checked':''}/> ${d}`; el.querySelector('input').onchange=e=>{obj.visible=e.target.checked;refreshDistanceData(d)}; distanceFilters.appendChild(el);});}
+function refreshSelectors(){raceSelect.innerHTML=Object.keys(state.races).map(r=>`<option ${r===state.selectedRace?'selected':''}>${r}</option>`).join(''); distanceSelect.innerHTML=Object.keys(race().distances).map(d=>`<option ${d===state.selectedDistance?'selected':''}>${d}</option>`).join(''); globalNote.value=race().note||''; rerenderFilters(); redrawPinsAndNotes();}
+function redrawPinsAndNotes(){state.markers.forEach(m=>map.removeLayer(m));state.markers=[]; race().pins.forEach(p=>state.markers.push(L.marker([p.lat,p.lng]).bindPopup(`${p.kind.toUpperCase()}: ${p.text||''}`).addTo(map))); race().notes.forEach(n=>state.markers.push(L.circleMarker([n.lat,n.lng],{radius:7,color:'#2563eb'}).bindPopup(`NOTE: ${n.text}`).addTo(map))); noteList.innerHTML=race().notes.map((n,i)=>`<div>${i+1}. ${n.text}</div>`).join('')||'No map notes yet.';}
+function havMiles(a,b){const R=3958.8,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,h=Math.sin(dLat/2)**2+Math.sin(dLon/2)**2*Math.cos(lat1)*Math.cos(lat2);return 2*R*Math.asin(Math.sqrt(h));}
+map.on('click',e=>{const{lng,lat}=e.latlng;if(state.mode==='draw'){race().distances[state.selectedDistance].coords.push([lng,lat]);refreshDistanceData(state.selectedDistance);return;} const kind=pinType.value,text=prompt('Optional label / note for this item:')||''; if(kind==='note')race().notes.push({lng,lat,text:text||'Map note'}); else race().pins.push({kind,lng,lat,text}); redrawPinsAndNotes();});
+raceSelect.onchange=()=>{state.selectedRace=raceSelect.value;state.selectedDistance=Object.keys(race().distances)[0];ensureDistanceLayers();Object.keys(race().distances).forEach(refreshDistanceData);refreshSelectors();};
+distanceSelect.onchange=()=>{state.selectedDistance=distanceSelect.value;Object.keys(race().distances).forEach(refreshDistanceData);}; showOverlap.onchange=()=>{state.showOverlap=showOverlap.checked;Object.keys(race().distances).forEach(refreshDistanceData);};
+drawBtn.onclick=()=>state.mode='draw'; pinBtn.onclick=()=>state.mode='pin'; newRaceBtn.onclick=()=>{const n=prompt('Race name:');if(!n||state.races[n])return;state.races[n]={note:'',distances:{'5K':{coords:[],visible:true}},pins:[],notes:[]};state.selectedRace=n;state.selectedDistance='5K';ensureDistanceLayers();refreshSelectors();};
+deleteRaceBtn.onclick=()=>{if(Object.keys(state.races).length<2)return alert('Keep at least one race.');delete state.races[state.selectedRace];state.selectedRace=Object.keys(state.races)[0];state.selectedDistance=Object.keys(race().distances)[0];refreshSelectors();};
+newDistanceBtn.onclick=()=>{const d=prompt('Distance label:');if(!d||race().distances[d])return;race().distances[d]={coords:[],visible:true};state.selectedDistance=d;ensureDistanceLayers();refreshSelectors();};
+clearDistanceBtn.onclick=()=>{race().distances[state.selectedDistance].coords=[];refreshDistanceData(state.selectedDistance)}; saveGlobalNote.onclick=()=>{race().note=globalNote.value;alert('Race note saved')};
+autoMileBtn.onclick=()=>{const c=race().distances[state.selectedDistance].coords;if(c.length<2)return alert('Draw a route first.');let cum=0,mile=1;for(let i=1;i<c.length;i++){cum+=havMiles(c[i-1],c[i]);if(cum>=mile){race().pins.push({kind:'mile',lng:c[i][0],lat:c[i][1],text:`Mile ${mile}`});mile++;}}redrawPinsAndNotes();};
+ensureDistanceLayers();refreshSelectors();
+</script></body></html>
